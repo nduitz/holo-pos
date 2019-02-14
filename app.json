@@ -1,0 +1,14 @@
+{
+  "name": "Holochain POS",
+  "description": "A Holochain POS",
+  "authors": [
+    {
+      "identifier": "Nick Duitz <nick.duitz@9elements.com>",
+      "public_key_source": "",
+      "signature": ""
+    }
+  ],
+  "version": "0.1.0",
+  "dht": {},
+  "properties": null
+}
