@@ -8,6 +8,8 @@ extern crate serde_derive;
 #[macro_use]
 extern crate holochain_core_types_derive;
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use hdk::{
   error::{ZomeApiResult, ZomeApiError},
   holochain_core_types::{
@@ -25,16 +27,17 @@ use hdk::{
 pub struct Product {
   pub name: String,
   pub description: String,
-  pub price: String,
+  pub price: f32,
 }
 
 #[derive(Serialize, Deserialize, Debug, DefaultJson)]
 pub struct Position {
-  pub amount: i8,
+  pub amount: i8
 }
 
 #[derive(Serialize, Deserialize, Debug, DefaultJson)]
 pub struct Basket {
+  pub name: String,
   pub sum: f32,
 }
 
@@ -44,6 +47,20 @@ pub struct BasketResponse {
   pub positions: Vec<Position>,
 }
 
+#[derive(Serialize, Deserialize, Debug, DefaultJson)]
+pub struct BasketResponseAll {
+  pub name: String,
+  pub sum: f32,
+  pub id: HashString
+}
+
+#[derive(Serialize, Deserialize, Debug, DefaultJson)]
+pub struct ProductResponse {
+  pub id: HashString,
+  pub name: String,
+  pub description: String,
+  pub price: f32,
+}
 
 #[derive(Serialize, Deserialize, Debug, DefaultJson)]
 pub struct Table {
@@ -140,11 +157,56 @@ define_zome! {
       }
       get_products: {
         inputs: |product: Product|,
-        outputs: |result: Vec<Product>|,
+        outputs: |result: Vec<ProductResponse>|,
         handler: handle_get_products
+      }
+      get_baskets: {
+        inputs: | |,
+        outputs: |result: Vec<BasketResponseAll>|,
+        handler: handle_get_baskets
+      }
+      init_mock_data: {
+        inputs: |products: Vec<Product>, baskets: Vec<Basket>, positions: Vec<Position>|,
+        outputs: |result: Vec<Address>|,
+        handler: handle_init_mock_data
       }
     }
   }
+}
+
+fn handle_init_mock_data(products: Vec<Product>, baskets: Vec<Basket>, positions: Vec<Position>) -> Vec<Address>{
+  let product_addresses = products
+    .iter()
+    .map(|product| {
+      let product_entry = Entry::App("product".into(), product.into());
+      hdk::commit_entry(&product_entry)
+    })
+    .filter_map(Result::ok)
+    .collect::<Vec<Address>>();
+
+  let basket_addresses = baskets
+    .iter()
+    .map(|basket| {
+      let basket_entry = Entry::App("basket".into(), basket.into());
+      hdk::commit_entry(&basket_entry)
+    })
+    .filter_map(Result::ok)
+    .collect::<Vec<Address>>();
+  for product_addr in &product_addresses {
+      basket_addresses
+        .iter()
+        .map(|basket_addr| {
+          let mut position = Position {
+            amount: 5,
+          };
+            let position_entry = Entry::App("position".into(), position.into());
+            let position_addr = hdk::commit_entry(&position_entry)?;
+            hdk::link_entries(&basket_addr, &position_addr, "positions");
+            hdk::link_entries(&position_addr, &product_addr, "product")
+        });
+  };
+
+  basket_addresses
 }
 
 fn handle_create_product(product: Product) -> ZomeApiResult<Address> {
@@ -185,14 +247,35 @@ fn handle_get_basket(basket_addr: HashString) -> ZomeApiResult<BasketResponse> {
   })
 }
 
-pub fn handle_get_products(product: Product) -> Vec<Product> {
-  hdk::query("product".into(), 0, 0).unwrap()
-    .iter()
-    .map(|product_address| {
-      get_as_type::<Product>(product_address.to_owned())
+fn handle_get_baskets() -> Vec<BasketResponseAll> {
+  let mut results = hdk::query("basket".into(), 0, 0).unwrap();
+  results.dedup();
+  results.iter()
+    .map(|basket_address| {
+      let basket = get_as_type::<Basket>(basket_address.to_owned()).unwrap();
+      BasketResponseAll {
+        name: basket.name,
+        sum: basket.sum,
+        id: basket_address.to_owned()
+      }
     })
-    .filter_map(Result::ok)
-    .collect::<Vec<Product>>()
+    .collect::<Vec<BasketResponseAll>>()
+}
+
+pub fn handle_get_products(product: Product) -> Vec<ProductResponse> {
+  let mut results = hdk::query("product".into(), 0, 0).unwrap();
+  results.dedup();
+  results.iter()
+    .map(|product_address| {
+      let product = get_as_type::<Product>(product_address.to_owned()).unwrap();
+      ProductResponse {
+        name: product.name,
+        description: product.description,
+        price: product.price,
+        id: product_address.to_owned()
+      }
+    })
+    .collect::<Vec<ProductResponse>>()
 }
 
 pub fn update_basket(basket_addr: &HashString, product_addr: &HashString, position_addr: &HashString) -> ZomeApiResult<Address>{
