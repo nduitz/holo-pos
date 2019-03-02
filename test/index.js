@@ -30,11 +30,13 @@ const mockProduct = {
 }
 
 const mockBasket = {
+  name: "Test",
   sum: 0
 }
 
 const mockPosition = {
-  amount: 5
+  amount: 5,
+  timestamp: Date.now().toString()
 }
 
 test('Can create a product', (t) => {
@@ -58,7 +60,7 @@ test('Can add some positions', (t) => {
   const basket_addr = create_basket_result.Ok
 
   const result1 = app.call("pos", "main", "add_product", {product_addr: product_addr, basket_addr: basket_addr, position: mockPosition})
-  const result2 = app.call("pos", "main", "add_product", {product_addr: product_addr, basket_addr: basket_addr, position: {amount: 2}})
+  const result2 = app.call("pos", "main", "add_product", {product_addr: product_addr, basket_addr: basket_addr, position: {amount: 2, timestamp: Date.now().toString()}})
   console.log(result1)
 
   t.notEqual(result1.Ok, undefined)
@@ -74,7 +76,7 @@ test('Can get a basket with positions', (t) => {
   const basket_addr = create_basket_result.Ok
 
   const result1 = app.call("pos", "main", "add_product", {product_addr: product_addr, basket_addr: basket_addr, position: mockPosition})
-  const result2 = app.call("pos", "main", "add_product", {product_addr: product_addr, basket_addr: basket_addr, position: {amount: 2}})
+  const result2 = app.call("pos", "main", "add_product", {product_addr: product_addr, basket_addr: basket_addr, position: {amount: 2, timestamp: Date.now().toString()}})
 
   const get_result = app.call("pos", "main", "get_basket", {basket_addr: basket_addr})
   console.log(get_result.Ok.positions)

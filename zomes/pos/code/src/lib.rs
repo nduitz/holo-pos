@@ -32,7 +32,8 @@ pub struct Product {
 
 #[derive(Serialize, Deserialize, Debug, DefaultJson)]
 pub struct Position {
-  pub amount: i8
+  pub amount: i8,
+  pub timestamp: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, DefaultJson)]
@@ -43,8 +44,10 @@ pub struct Basket {
 
 #[derive(Serialize, Deserialize, Debug, DefaultJson)]
 pub struct BasketResponse {
+  pub id: HashString,
+  pub name: String,
   pub sum: f32,
-  pub positions: Vec<Position>,
+  pub product_positions: Vec<PositionWithProduct>,
 }
 
 #[derive(Serialize, Deserialize, Debug, DefaultJson)]
@@ -60,6 +63,12 @@ pub struct ProductResponse {
   pub name: String,
   pub description: String,
   pub price: f32,
+}
+
+#[derive(Serialize, Deserialize, Debug, DefaultJson)]
+pub struct PositionWithProduct {
+  pub amount: i8,
+  pub product: Product
 }
 
 #[derive(Serialize, Deserialize, Debug, DefaultJson)]
@@ -97,7 +106,7 @@ define_zome! {
           "position",
           tag: "positions",
           validation_package: || {
-            hdk::ValidationPackageDefinition::ChainFull
+            hdk::ValidationPackageDefinition::Entry
           },
           validation: |base: Address, target: Address, _ctx: hdk::ValidationData| {
             Ok(())
@@ -121,7 +130,7 @@ define_zome! {
           "product",
           tag: "product",
           validation_package: || {
-            hdk::ValidationPackageDefinition::ChainFull
+            hdk::ValidationPackageDefinition::Entry
           },
           validation: |base: Address, target: Address, _ctx: hdk::ValidationData| {
             Ok(())
@@ -147,7 +156,7 @@ define_zome! {
       }
       add_product: {
         inputs: |product_addr: HashString, basket_addr: HashString, position: Position|,
-        outputs: |result: ZomeApiResult<HashString>|,
+        outputs: |result: ZomeApiResult<BasketResponse>|,
         handler: handle_add_product
       }
       get_basket: {
@@ -156,9 +165,14 @@ define_zome! {
         handler: handle_get_basket
       }
       get_products: {
-        inputs: |product: Product|,
+        inputs: |  |,
         outputs: |result: Vec<ProductResponse>|,
         handler: handle_get_products
+      }
+      get_product: {
+        inputs: |product_addr: HashString|,
+        outputs: |result: ZomeApiResult<ProductResponse>|,
+        handler: handle_get_product
       }
       get_baskets: {
         inputs: | |,
@@ -192,19 +206,6 @@ fn handle_init_mock_data(products: Vec<Product>, baskets: Vec<Basket>, positions
     })
     .filter_map(Result::ok)
     .collect::<Vec<Address>>();
-  for product_addr in &product_addresses {
-      basket_addresses
-        .iter()
-        .map(|basket_addr| {
-          let mut position = Position {
-            amount: 5,
-          };
-            let position_entry = Entry::App("position".into(), position.into());
-            let position_addr = hdk::commit_entry(&position_entry)?;
-            hdk::link_entries(&basket_addr, &position_addr, "positions");
-            hdk::link_entries(&position_addr, &product_addr, "product")
-        });
-  };
 
   basket_addresses
 }
@@ -219,31 +220,39 @@ fn handle_create_basket(basket: Basket) -> ZomeApiResult<Address> {
   hdk::commit_entry(&basket_entry)
 }
 
-fn handle_add_product(product_addr: HashString, basket_addr: HashString, position: Position) -> ZomeApiResult<Address> {
+fn handle_add_product(product_addr: HashString, basket_addr: HashString, position: Position) -> ZomeApiResult<BasketResponse> {
   let position_entry = Entry::App("position".into(), position.into());
   let position_addr = hdk::commit_entry(&position_entry)?;
-  // since update_entry seems to be not supported yet
-  // update_basket(&basket_addr,&product_addr,&position_addr)?;
   hdk::link_entries(&basket_addr, &position_addr, "positions")?;
   hdk::link_entries(&position_addr, &product_addr, "product")?;
-  Ok(position_addr)
+  update_basket(&basket_addr, &product_addr, &position_addr);
+  handle_get_basket(basket_addr)
 }
 
 fn handle_get_basket(basket_addr: HashString) -> ZomeApiResult<BasketResponse> {
 
   let basket = get_as_type::<Basket>(basket_addr.clone())?;
 
-  let positions = hdk::get_links(&basket_addr, "positions")?.addresses()
+  let positions_with_products = hdk::get_links(&basket_addr, "positions")?.addresses()
     .iter()
     .map(|position_address| {
-      get_as_type::<Position>(position_address.to_owned())
+      let position = get_as_type::<Position>(position_address.to_owned()).unwrap();
+      let product_addresses_result = hdk::get_links(&position_address, "product").unwrap();
+      let product_addresses = product_addresses_result.addresses();
+      let product_address = product_addresses.first().unwrap();
+      let product = get_as_type::<Product>(product_address.to_owned().clone()).unwrap();
+      PositionWithProduct {
+        amount: position.amount,
+        product: product,
+      }
     })
-    .filter_map(Result::ok)
-    .collect::<Vec<Position>>();
+    .collect::<Vec<PositionWithProduct>>();
 
   Ok(BasketResponse{
+    name: basket.name,
+    id: basket_addr,
     sum: basket.sum,
-    positions: positions
+    product_positions: positions_with_products
   })
 }
 
@@ -262,7 +271,7 @@ fn handle_get_baskets() -> Vec<BasketResponseAll> {
     .collect::<Vec<BasketResponseAll>>()
 }
 
-pub fn handle_get_products(product: Product) -> Vec<ProductResponse> {
+pub fn handle_get_products() -> Vec<ProductResponse> {
   let mut results = hdk::query("product".into(), 0, 0).unwrap();
   results.dedup();
   results.iter()
@@ -278,10 +287,21 @@ pub fn handle_get_products(product: Product) -> Vec<ProductResponse> {
     .collect::<Vec<ProductResponse>>()
 }
 
+fn handle_get_product(product_addr: HashString) -> ZomeApiResult<ProductResponse> {
+  let product = get_as_type::<Product>(product_addr.clone())?;
+  Ok(ProductResponse {
+    id: product_addr,
+    name: product.name,
+    description: product.description,
+    price: product.price
+  })
+}
+
 pub fn update_basket(basket_addr: &HashString, product_addr: &HashString, position_addr: &HashString) -> ZomeApiResult<Address>{
   let mut basket = get_as_type::<Basket>(basket_addr.clone())?;
   let product = get_as_type::<Product>(product_addr.clone())?;
   let position = get_as_type::<Position>(position_addr.clone())?;
+  basket.sum += product.price * position.amount as f32;
   update_entry(Entry::App("basket".into(),basket.into()),&basket_addr)
 }
 
@@ -292,7 +312,7 @@ pub fn get_as_type<R: TryFrom<AppEntryValue>>(address: HashString) -> ZomeApiRes
     Entry::App(_, entry_value) => {
       R::try_from(entry_value.to_owned())
         .map_err(|_| ZomeApiError::Internal(
-          "Could not convert get)links result tot requested type".to_string()
+          "Could not convert getlinks result to requested type".to_string()
         ))
     },
     _ => Err(ZomeApiError::Internal(
